@@ -216,7 +216,7 @@ export default function App() {
             <ConfigForm
               config={config}
               onChange={setConfig}
-              disabled={transportState !== 'idle' && transportState !== 'disconnected' && transportState !== 'error'}
+              disabled={['authenticating', 'connecting', 'connected', 'ready', 'disconnecting'].includes(transportState)}
             />
           </div>
 

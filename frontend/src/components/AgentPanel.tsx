@@ -28,7 +28,9 @@ const STATE_LABELS: Record<TransportState, string> = {
 }
 
 const isActive = (s: TransportState) => s === 'ready' || s === 'connected'
-const isBusy   = (s: TransportState) => ['initializing','initialized','authenticating','connecting','disconnecting'].includes(s)
+// 'initializing' and 'initialized' are device-setup states that happen on page load;
+// they are not an active connection, so the button must stay as "Start Agent".
+const isBusy = (s: TransportState) => ['authenticating', 'connecting', 'disconnecting'].includes(s)
 
 export default function AgentPanel({ state, agentName, onStart, onStop, isMicMuted, onToggleMic, hearLocally, onToggleHearLocally }: Props) {
   return (
