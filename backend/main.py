@@ -21,7 +21,7 @@ from loguru import logger
 from aiortc.sdp import candidate_from_sdp
 from pipecat.transports.smallwebrtc.connection import IceServer, SmallWebRTCConnection
 
-from bot import run_bot
+from bot import run_bot, validate_config
 
 load_dotenv()
 
@@ -70,6 +70,11 @@ async def offer(request: dict, background_tasks: BackgroundTasks):
             status_code=400,
             detail="requestData (agent config) missing from offer body.",
         )
+
+    try:
+        validate_config(config)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
     connection = SmallWebRTCConnection(ICE_SERVERS)
     await connection.initialize(sdp=request["sdp"], type=request["type"])

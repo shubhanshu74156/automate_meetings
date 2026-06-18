@@ -32,6 +32,7 @@ from pipecat.frames.frames import (
     AudioRawFrame,
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
+    FatalErrorFrame,
     Frame,
     LLMRunFrame,
 )
@@ -263,6 +264,42 @@ class VBCableOutput(FrameProcessor):
 
 
 # ---------------------------------------------------------------------------
+# Config validation (pre-flight — called before WebRTC even starts)
+# ---------------------------------------------------------------------------
+
+_VALID_STT = {"sarvam", "openai", "deepgram", "groq"}
+_VALID_LLM = {"openai", "cerebras", "anthropic", "google", "groq", "together"}
+_VALID_TTS = {"cartesia", "openai", "deepgram", "elevenlabs", "groq"}
+
+
+def validate_config(config: dict) -> None:
+    """Raise ValueError with a user-friendly message if the config is invalid."""
+    errors: list[str] = []
+
+    stt = config.get("stt_provider", "sarvam").lower()
+    llm = config.get("llm_provider", "openai").lower()
+    tts = config.get("tts_provider", "cartesia").lower()
+
+    if stt not in _VALID_STT:
+        errors.append(f"Unknown STT provider '{stt}'. Valid: {sorted(_VALID_STT)}")
+    elif not config.get("stt_api_key", "").strip():
+        errors.append(f"STT API key is required for provider '{stt}'")
+
+    if llm not in _VALID_LLM:
+        errors.append(f"Unknown LLM provider '{llm}'. Valid: {sorted(_VALID_LLM)}")
+    elif not config.get("llm_api_key", "").strip():
+        errors.append(f"LLM API key is required for provider '{llm}'")
+
+    if tts not in _VALID_TTS:
+        errors.append(f"Unknown TTS provider '{tts}'. Valid: {sorted(_VALID_TTS)}")
+    elif not config.get("tts_api_key", "").strip():
+        errors.append(f"TTS API key is required for provider '{tts}'")
+
+    if errors:
+        raise ValueError(" | ".join(errors))
+
+
+# ---------------------------------------------------------------------------
 # Service builders
 # ---------------------------------------------------------------------------
 
@@ -454,15 +491,23 @@ async def run_bot(webrtc_connection: SmallWebRTCConnection, config: dict) -> Non
         params=TransportParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
-            audio_out_sample_rate=48000,  # Cartesia outputs 48kHz → matches VB-Cable native rate
+            audio_out_sample_rate=48000,
         ),
     )
 
-    stt = build_stt(config)
-    llm = build_llm(config)
-    tts = build_tts(config)
-    stt_gate = STTInputGate()  # mutes mic while bot is speaking → breaks echo loop
-    vb_out = VBCableOutput()   # writes TTS audio → CABLE Input → Google Meet mic
+    # ── Build services (any failure here aborts the session cleanly) ──────────
+    try:
+        stt = build_stt(config)
+        llm = build_llm(config)
+        tts = build_tts(config)
+    except Exception as exc:
+        err_msg = f"Service init failed: {exc}"
+        logger.error(err_msg)
+        await _abort_connection(webrtc_connection, err_msg)
+        return
+
+    stt_gate = STTInputGate()
+    vb_out = VBCableOutput()
 
     context = LLMContext()
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
@@ -473,12 +518,12 @@ async def run_bot(webrtc_connection: SmallWebRTCConnection, config: dict) -> Non
     pipeline = Pipeline(
         [
             transport.input(),
-            stt_gate,            # ← drops mic audio while bot speaks
+            stt_gate,
             stt,
             user_aggregator,
             llm,
             tts,
-            vb_out,              # ← taps TTS frames to VB-Cable before WebRTC
+            vb_out,
             transport.output(),
             assistant_aggregator,
         ]
@@ -511,7 +556,29 @@ async def run_bot(webrtc_connection: SmallWebRTCConnection, config: dict) -> Non
         logger.info("Client disconnected — cancelling worker")
         await worker.cancel()
 
+    # ── Run the pipeline (catch unexpected runtime failures) ──────────────────
     runner = WorkerRunner(handle_sigint=False)
     await runner.add_workers(worker)
-    await runner.run()
-    logger.info("Bot session ended")
+    try:
+        await runner.run()
+    except Exception as exc:
+        err_msg = f"Pipeline error: {exc}"
+        logger.error(err_msg)
+        # Push a fatal error frame so the RTVI layer forwards it to the frontend
+        try:
+            await worker.queue_frames([FatalErrorFrame(error=err_msg)])
+            await asyncio.sleep(0.3)
+        except Exception:
+            pass
+        await worker.cancel()
+    finally:
+        logger.info("Bot session ended")
+
+
+async def _abort_connection(conn: SmallWebRTCConnection, reason: str) -> None:
+    """Disconnect a WebRTC connection that never got a pipeline attached."""
+    logger.warning(f"Aborting connection: {reason}")
+    try:
+        await conn.disconnect()
+    except Exception as e:
+        logger.debug(f"_abort_connection cleanup error: {e}")
