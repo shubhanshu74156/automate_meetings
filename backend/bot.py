@@ -3,10 +3,11 @@ Pipecat meeting delegate bot.
 
 Pipeline:
   transport.input()
-    → SarvamSTTService       (speech → text)
+    → STTInputGate           (drops mic audio while bot is speaking)
+    → STT service            (speech → text; sarvam / openai / deepgram / groq)
     → user_aggregator        (VAD + context window)
-    → OpenAI / Cerebras LLM  (text → text)
-    → CartesiaTTSService     (text → speech)
+    → LLM service            (text → text; openai / cerebras / anthropic / google / groq / together)
+    → TTS service            (text → speech; cartesia / openai / deepgram / elevenlabs / groq)
     → VBCableOutput          (mirrors TTS audio → CABLE Input → Google Meet mic)
     → transport.output()
     → assistant_aggregator   (records bot utterances)
@@ -45,7 +46,48 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.services.cerebras.llm import CerebrasLLMService
 from pipecat.services.openai.llm import OpenAILLMService
+from pipecat.services.openai.stt import OpenAISTTService
+from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.services.sarvam.stt import SarvamSTTService
+
+try:
+    from pipecat.services.deepgram.stt import DeepgramSTTService
+    from pipecat.services.deepgram.tts import DeepgramTTSService
+    _DEEPGRAM_OK = True
+except ImportError:
+    _DEEPGRAM_OK = False
+
+try:
+    from pipecat.services.groq.stt import GroqSTTService
+    from pipecat.services.groq.llm import GroqLLMService
+    from pipecat.services.groq.tts import GroqTTSService
+    _GROQ_OK = True
+except ImportError:
+    _GROQ_OK = False
+
+try:
+    from pipecat.services.anthropic.llm import AnthropicLLMService
+    _ANTHROPIC_OK = True
+except ImportError:
+    _ANTHROPIC_OK = False
+
+try:
+    from pipecat.services.google.llm import GoogleLLMService
+    _GOOGLE_OK = True
+except ImportError:
+    _GOOGLE_OK = False
+
+try:
+    from pipecat.services.together.llm import TogetherLLMService
+    _TOGETHER_OK = True
+except ImportError:
+    _TOGETHER_OK = False
+
+try:
+    from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
+    _ELEVENLABS_OK = True
+except ImportError:
+    _ELEVENLABS_OK = False
 from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
@@ -224,53 +266,151 @@ class VBCableOutput(FrameProcessor):
 # Service builders
 # ---------------------------------------------------------------------------
 
-def build_stt(config: dict) -> SarvamSTTService:
+def build_stt(config: dict):
+    provider = config.get("stt_provider", "sarvam").lower()
+    api_key = config.get("stt_api_key", "")
+    model = config.get("stt_model", "")
+
+    if provider == "openai":
+        return OpenAISTTService(
+            api_key=api_key,
+            settings=OpenAISTTService.Settings(model=model or "gpt-4o-transcribe"),
+        )
+
+    if provider == "deepgram":
+        if not _DEEPGRAM_OK:
+            raise RuntimeError("Deepgram extras not installed — run: pip install 'pipecat-ai[deepgram]'")
+        return DeepgramSTTService(
+            api_key=api_key,
+            settings=DeepgramSTTService.Settings(model=model or "nova-3-general"),
+        )
+
+    if provider == "groq":
+        if not _GROQ_OK:
+            raise RuntimeError("Groq extras not installed — run: pip install 'pipecat-ai[groq]'")
+        return GroqSTTService(
+            api_key=api_key,
+            settings=GroqSTTService.Settings(model=model or "whisper-large-v3-turbo"),
+        )
+
+    # default: sarvam
     return SarvamSTTService(
-        api_key=config["stt_api_key"],
-        settings=SarvamSTTService.Settings(
-            model=config.get("stt_model", "saaras:v3"),
-        ),
+        api_key=api_key,
+        settings=SarvamSTTService.Settings(model=model or "saaras:v3"),
     )
 
 
-_OPENAI_MODELS = {"gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4-turbo", "gpt-3.5-turbo"}
-_CEREBRAS_DEFAULT = "gpt-oss-120b"
-_OPENAI_DEFAULT = "gpt-4o-mini"
+_LLM_DEFAULTS: dict[str, str] = {
+    "openai": "gpt-4o-mini",
+    "cerebras": "gpt-oss-120b",
+    "anthropic": "claude-sonnet-4-6",
+    "google": "gemini-2.0-flash-001",
+    "groq": "llama-3.3-70b-versatile",
+    "together": "openai/gpt-oss-20b",
+}
 
 
-def build_llm(config: dict) -> OpenAILLMService | CerebrasLLMService:
+def build_llm(config: dict):
     system_prompt = _make_system_prompt(config)
     provider = config.get("llm_provider", "openai").lower()
-    model = config.get("llm_model", "")
+    model = config.get("llm_model", "") or _LLM_DEFAULTS.get(provider, "gpt-4o-mini")
+    api_key = config.get("llm_api_key", "")
 
     if provider == "cerebras":
-        if not model or model in _OPENAI_MODELS:
-            logger.warning(f"Model '{model}' is not a Cerebras model — falling back to {_CEREBRAS_DEFAULT}")
-            model = _CEREBRAS_DEFAULT
         return CerebrasLLMService(
-            api_key=config["llm_api_key"],
-            settings=CerebrasLLMService.Settings(
-                model=model,
-                system_instruction=system_prompt,
+            api_key=api_key,
+            settings=CerebrasLLMService.Settings(model=model, system_instruction=system_prompt),
+        )
+
+    if provider == "anthropic":
+        if not _ANTHROPIC_OK:
+            raise RuntimeError("Anthropic extras not installed — run: pip install 'pipecat-ai[anthropic]'")
+        return AnthropicLLMService(
+            api_key=api_key,
+            settings=AnthropicLLMService.Settings(model=model, system_instruction=system_prompt),
+        )
+
+    if provider == "google":
+        if not _GOOGLE_OK:
+            raise RuntimeError("Google extras not installed — run: pip install 'pipecat-ai[google]'")
+        return GoogleLLMService(
+            api_key=api_key,
+            settings=GoogleLLMService.Settings(model=model, system_instruction=system_prompt),
+        )
+
+    if provider == "groq":
+        if not _GROQ_OK:
+            raise RuntimeError("Groq extras not installed — run: pip install 'pipecat-ai[groq]'")
+        return GroqLLMService(
+            api_key=api_key,
+            settings=GroqLLMService.Settings(model=model, system_instruction=system_prompt),
+        )
+
+    if provider == "together":
+        if not _TOGETHER_OK:
+            raise RuntimeError("Together extras not installed — run: pip install 'pipecat-ai[together]'")
+        return TogetherLLMService(
+            api_key=api_key,
+            settings=TogetherLLMService.Settings(model=model, system_instruction=system_prompt),
+        )
+
+    # default: openai
+    return OpenAILLMService(
+        api_key=api_key,
+        settings=OpenAILLMService.Settings(model=model, system_instruction=system_prompt),
+    )
+
+
+def build_tts(config: dict):
+    provider = config.get("tts_provider", "cartesia").lower()
+    api_key = config.get("tts_api_key", "")
+    voice = config.get("tts_voice_id", "")
+    tts_model = config.get("tts_model", "")
+
+    if provider == "openai":
+        return OpenAITTSService(
+            api_key=api_key,
+            settings=OpenAITTSService.Settings(
+                voice=voice or "alloy",
+                model=tts_model or "gpt-4o-mini-tts",
             ),
         )
 
-    if not model:
-        model = _OPENAI_DEFAULT
-    return OpenAILLMService(
-        api_key=config["llm_api_key"],
-        settings=OpenAILLMService.Settings(
-            model=model,
-            system_instruction=system_prompt,
-        ),
-    )
+    if provider == "deepgram":
+        if not _DEEPGRAM_OK:
+            raise RuntimeError("Deepgram extras not installed — run: pip install 'pipecat-ai[deepgram]'")
+        return DeepgramTTSService(
+            api_key=api_key,
+            settings=DeepgramTTSService.Settings(voice=voice or "aura-2-helena-en"),
+        )
 
+    if provider == "elevenlabs":
+        if not _ELEVENLABS_OK:
+            raise RuntimeError("ElevenLabs extras not installed — run: pip install 'pipecat-ai[elevenlabs]'")
+        return ElevenLabsTTSService(
+            api_key=api_key,
+            settings=ElevenLabsTTSService.Settings(
+                voice=voice or "21m00Tcm4TlvDq8ikWAM",
+                model=tts_model or "eleven_flash_v2_5",
+            ),
+        )
 
-def build_tts(config: dict) -> CartesiaTTSService:
+    if provider == "groq":
+        if not _GROQ_OK:
+            raise RuntimeError("Groq extras not installed — run: pip install 'pipecat-ai[groq]'")
+        return GroqTTSService(
+            api_key=api_key,
+            settings=GroqTTSService.Settings(
+                voice=voice or "autumn",
+                model=tts_model or "canopylabs/orpheus-v1-english",
+            ),
+        )
+
+    # default: cartesia
     return CartesiaTTSService(
-        api_key=config["tts_api_key"],
+        api_key=api_key,
         settings=CartesiaTTSService.Settings(
-            voice=config.get("tts_voice_id", "71a7ad14-091c-4e8e-a314-022ece01c121"),
+            voice=voice or "71a7ad14-091c-4e8e-a314-022ece01c121",
         ),
     )
 
@@ -302,7 +442,12 @@ def _make_system_prompt(config: dict) -> str:
 async def run_bot(webrtc_connection: SmallWebRTCConnection, config: dict) -> None:
     """Create the Pipecat pipeline and run it for one WebRTC session."""
 
-    logger.info(f"Bot starting — agent={config.get('agent_name')} llm={config.get('llm_provider')}")
+    logger.info(
+        f"Bot starting — agent={config.get('agent_name')} "
+        f"stt={config.get('stt_provider', 'sarvam')} "
+        f"llm={config.get('llm_provider', 'openai')} "
+        f"tts={config.get('tts_provider', 'cartesia')}"
+    )
 
     transport = SmallWebRTCTransport(
         webrtc_connection=webrtc_connection,

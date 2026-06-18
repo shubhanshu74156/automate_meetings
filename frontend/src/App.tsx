@@ -71,16 +71,10 @@ export default function App() {
   const handleStart = useCallback(async () => {
     setError(null)
     try {
-      // 1. Push config to backend
-      const cfgRes = await fetch('/api/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(config),
-      })
-      if (!cfgRes.ok) throw new Error(`Config failed: ${cfgRes.statusText}`)
-
-      // 2. Connect the Pipecat audio pipeline via WebRTC
-      await client.connect({ connection_url: '/api/offer' })
+      await client.connect({
+        connection_url: '/api/offer',
+        requestData: config,
+      } as any)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
       setTransportState('error')
@@ -117,7 +111,7 @@ export default function App() {
             <div>
               <h1 className="text-lg font-bold text-white">AI Meeting Delegate</h1>
               <p className="text-xs text-gray-500 mt-0.5">
-                Powered by Sarvam STT · OpenAI / Cerebras LLM · Cartesia TTS
+                Multi-provider STT · LLM · TTS — powered by Pipecat
               </p>
             </div>
           </div>

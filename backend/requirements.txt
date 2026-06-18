@@ -1,5 +1,5 @@
 # Core Pipecat with required service extras
-pipecat-ai[silero,sarvam,openai,cerebras,cartesia]>=1.4.0
+pipecat-ai[silero,sarvam,openai,cerebras,cartesia,deepgram,anthropic,google,groq,together,elevenlabs]>=1.4.0
 
 # Web framework
 fastapi>=0.115.0

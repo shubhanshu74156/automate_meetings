@@ -1,4 +1,16 @@
-import { AgentConfig, CARTESIA_VOICES, CEREBRAS_MODELS, LLMProvider, OPENAI_MODELS, SARVAM_MODELS } from '../types'
+import {
+  AgentConfig,
+  LLMProvider,
+  STTProvider,
+  TTSProvider,
+  LLM_MODELS,
+  LLM_PROVIDERS,
+  STT_MODELS,
+  STT_PROVIDERS,
+  TTS_MODELS,
+  TTS_PROVIDERS,
+  TTS_VOICES,
+} from '../types'
 
 interface Props {
   config: AgentConfig
@@ -10,13 +22,30 @@ export default function ConfigForm({ config, onChange, disabled }: Props) {
   const set = (key: keyof AgentConfig, value: string) =>
     onChange({ ...config, [key]: value })
 
-  const handleProviderChange = (provider: LLMProvider) => {
-    const defaultModel =
-      provider === 'cerebras' ? CEREBRAS_MODELS[0].value : OPENAI_MODELS[0].value
-    onChange({ ...config, llm_provider: provider, llm_model: defaultModel })
+  const handleSTTProviderChange = (provider: STTProvider) => {
+    const defaultModel = STT_MODELS[provider][0].value
+    onChange({ ...config, stt_provider: provider, stt_model: defaultModel, stt_api_key: '' })
   }
 
-  const llmModels = config.llm_provider === 'cerebras' ? CEREBRAS_MODELS : OPENAI_MODELS
+  const handleLLMProviderChange = (provider: LLMProvider) => {
+    const defaultModel = LLM_MODELS[provider][0].value
+    onChange({ ...config, llm_provider: provider, llm_model: defaultModel, llm_api_key: '' })
+  }
+
+  const handleTTSProviderChange = (provider: TTSProvider) => {
+    const defaultVoice = TTS_VOICES[provider][0].value
+    const defaultModel = TTS_MODELS[provider]?.[0]?.value ?? ''
+    onChange({ ...config, tts_provider: provider, tts_voice_id: defaultVoice, tts_model: defaultModel, tts_api_key: '' })
+  }
+
+  const sttModels = STT_MODELS[config.stt_provider]
+  const llmModels = LLM_MODELS[config.llm_provider]
+  const ttsVoices = TTS_VOICES[config.tts_provider]
+  const ttsModels = TTS_MODELS[config.tts_provider]
+
+  const llmProviderLabel = LLM_PROVIDERS.find(p => p.value === config.llm_provider)?.label ?? 'LLM'
+  const sttProviderLabel = STT_PROVIDERS.find(p => p.value === config.stt_provider)?.label ?? 'STT'
+  const ttsProviderLabel = TTS_PROVIDERS.find(p => p.value === config.tts_provider)?.label ?? 'TTS'
 
   return (
     <div className="space-y-6">
@@ -51,15 +80,29 @@ export default function ConfigForm({ config, onChange, disabled }: Props) {
       {/* ── STT ─────────────────────────────────────────────────── */}
       <section className="card space-y-4">
         <h2 className="text-sm font-semibold text-gray-300 uppercase tracking-wide">
-          STT — Sarvam
+          STT — {sttProviderLabel}
         </h2>
 
         <div className="field">
-          <label className="label">Sarvam API Key</label>
+          <label className="label">Provider</label>
+          <select
+            className="select"
+            value={config.stt_provider}
+            onChange={e => handleSTTProviderChange(e.target.value as STTProvider)}
+            disabled={disabled}
+          >
+            {STT_PROVIDERS.map(p => (
+              <option key={p.value} value={p.value}>{p.label}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="field">
+          <label className="label">{sttProviderLabel} API Key</label>
           <input
             className="input font-mono text-xs"
             type="password"
-            placeholder="sk-…"
+            placeholder="API key…"
             value={config.stt_api_key}
             onChange={e => set('stt_api_key', e.target.value)}
             disabled={disabled}
@@ -74,7 +117,7 @@ export default function ConfigForm({ config, onChange, disabled }: Props) {
             onChange={e => set('stt_model', e.target.value)}
             disabled={disabled}
           >
-            {SARVAM_MODELS.map(m => (
+            {sttModels.map(m => (
               <option key={m.value} value={m.value}>{m.label}</option>
             ))}
           </select>
@@ -83,29 +126,30 @@ export default function ConfigForm({ config, onChange, disabled }: Props) {
 
       {/* ── LLM ─────────────────────────────────────────────────── */}
       <section className="card space-y-4">
-        <h2 className="text-sm font-semibold text-gray-300 uppercase tracking-wide">LLM</h2>
+        <h2 className="text-sm font-semibold text-gray-300 uppercase tracking-wide">
+          LLM — {llmProviderLabel}
+        </h2>
 
         <div className="field">
           <label className="label">Provider</label>
           <select
             className="select"
             value={config.llm_provider}
-            onChange={e => handleProviderChange(e.target.value as LLMProvider)}
+            onChange={e => handleLLMProviderChange(e.target.value as LLMProvider)}
             disabled={disabled}
           >
-            <option value="openai">OpenAI</option>
-            <option value="cerebras">Cerebras</option>
+            {LLM_PROVIDERS.map(p => (
+              <option key={p.value} value={p.value}>{p.label}</option>
+            ))}
           </select>
         </div>
 
         <div className="field">
-          <label className="label">
-            {config.llm_provider === 'cerebras' ? 'Cerebras' : 'OpenAI'} API Key
-          </label>
+          <label className="label">{llmProviderLabel} API Key</label>
           <input
             className="input font-mono text-xs"
             type="password"
-            placeholder="sk-…"
+            placeholder="API key…"
             value={config.llm_api_key}
             onChange={e => set('llm_api_key', e.target.value)}
             disabled={disabled}
@@ -130,15 +174,29 @@ export default function ConfigForm({ config, onChange, disabled }: Props) {
       {/* ── TTS ─────────────────────────────────────────────────── */}
       <section className="card space-y-4">
         <h2 className="text-sm font-semibold text-gray-300 uppercase tracking-wide">
-          TTS — Cartesia
+          TTS — {ttsProviderLabel}
         </h2>
 
         <div className="field">
-          <label className="label">Cartesia API Key</label>
+          <label className="label">Provider</label>
+          <select
+            className="select"
+            value={config.tts_provider}
+            onChange={e => handleTTSProviderChange(e.target.value as TTSProvider)}
+            disabled={disabled}
+          >
+            {TTS_PROVIDERS.map(p => (
+              <option key={p.value} value={p.value}>{p.label}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="field">
+          <label className="label">{ttsProviderLabel} API Key</label>
           <input
             className="input font-mono text-xs"
             type="password"
-            placeholder="sk-…"
+            placeholder="API key…"
             value={config.tts_api_key}
             onChange={e => set('tts_api_key', e.target.value)}
             disabled={disabled}
@@ -153,14 +211,27 @@ export default function ConfigForm({ config, onChange, disabled }: Props) {
             onChange={e => set('tts_voice_id', e.target.value)}
             disabled={disabled}
           >
-            {CARTESIA_VOICES.map(v => (
+            {ttsVoices.map(v => (
               <option key={v.value} value={v.value}>{v.label}</option>
             ))}
           </select>
-          <p className="text-xs text-gray-500 mt-1">
-            Or paste any Cartesia voice ID directly into the field above.
-          </p>
         </div>
+
+        {ttsModels && (
+          <div className="field">
+            <label className="label">Model</label>
+            <select
+              className="select"
+              value={config.tts_model}
+              onChange={e => set('tts_model', e.target.value)}
+              disabled={disabled}
+            >
+              {ttsModels.map(m => (
+                <option key={m.value} value={m.value}>{m.label}</option>
+              ))}
+            </select>
+          </div>
+        )}
       </section>
     </div>
   )

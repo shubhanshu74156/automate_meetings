@@ -2,11 +2,11 @@
 AI Meeting Delegate — FastAPI server
 
 Endpoints:
-  POST /api/config   store agent configuration (API keys, provider choices)
-  GET  /api/config   read current configuration (keys redacted)
-  POST /api/offer    WebRTC SDP offer/answer (called by the frontend SDK)
-  GET  /api/status   connection status
-  GET  /health       liveness probe
+  POST  /api/offer   WebRTC SDP offer/answer (called by the frontend SDK)
+                     Agent config is passed inside requestData in the offer body.
+  PATCH /api/offer   ICE candidate trickling
+  GET   /api/status  connection status
+  GET   /health      liveness probe
 """
 
 import asyncio
@@ -29,7 +29,6 @@ load_dotenv()
 # State
 # ---------------------------------------------------------------------------
 
-_config: dict = {}
 pcs_map: dict[str, SmallWebRTCConnection] = {}
 
 ICE_SERVERS = [IceServer(urls="stun:stun.l.google.com:19302")]
@@ -60,33 +59,17 @@ app.add_middleware(
 
 
 # ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
-
-@app.post("/api/config")
-async def set_config(body: dict):
-    global _config
-    _config = body
-    logger.info(
-        f"Config saved — agent={body.get('agent_name')} "
-        f"llm={body.get('llm_provider')} model={body.get('llm_model')}"
-    )
-    return {"status": "ok"}
-
-
-@app.get("/api/config")
-async def get_config():
-    return {k: ("***" if k.endswith("_key") else v) for k, v in _config.items()}
-
-
-# ---------------------------------------------------------------------------
 # WebRTC offer  (SmallWebRTCTransport handshake — called by the frontend SDK)
 # ---------------------------------------------------------------------------
 
 @app.post("/api/offer")
 async def offer(request: dict, background_tasks: BackgroundTasks):
-    if not _config:
-        raise HTTPException(status_code=400, detail="POST /api/config first.")
+    config = request.get("requestData")
+    if not config:
+        raise HTTPException(
+            status_code=400,
+            detail="requestData (agent config) missing from offer body.",
+        )
 
     connection = SmallWebRTCConnection(ICE_SERVERS)
     await connection.initialize(sdp=request["sdp"], type=request["type"])
@@ -95,7 +78,7 @@ async def offer(request: dict, background_tasks: BackgroundTasks):
     async def on_closed(conn: SmallWebRTCConnection):
         pcs_map.pop(conn.pc_id, None)
 
-    background_tasks.add_task(run_bot, connection, dict(_config))
+    background_tasks.add_task(run_bot, connection, dict(config))
 
     answer = connection.get_answer()
     pcs_map[answer["pc_id"]] = connection
@@ -132,9 +115,6 @@ async def ice_candidates(request: dict):
 async def status():
     return {
         "active_connections": len(pcs_map),
-        "config_loaded": bool(_config),
-        "agent_name": _config.get("agent_name"),
-        "llm_provider": _config.get("llm_provider"),
     }
 
 
