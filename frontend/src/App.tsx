@@ -102,21 +102,22 @@ export default function App() {
       addEntry('agent', data.text)
     })
 
-    // Pipeline errors from the bot — RTVI sends { error: string, fatal: boolean }
-    // (not { message }). Fatal errors stop the pipeline; non-fatal ones are warnings.
+    // Pipeline errors from the bot — RTVI sends { error: string, fatal: boolean }.
+    // All provider services default fatal=false, so we cannot rely on that flag
+    // to decide whether to disconnect — any pipeline error means the agent is broken.
     client.on(RTVIEvent.Error, (msg: RTVIMessage) => {
       const data = msg.data as { error?: string; fatal?: boolean } | null
       const raw = data?.error ?? 'An unknown error occurred'
       const message = cleanErrorMessage(raw)
 
-      if (data?.fatal !== false) {
-        // Fatal: show error toast and stop the session so user can reconfigure
-        toast(message, 'error')
-        client.disconnect().catch(() => {})
-      } else {
-        // Non-fatal: warn but keep the session alive
-        toast(message, 'warning')
-      }
+      toast(message, 'error')
+
+      // Force the UI to reset immediately so the button reverts to Start Agent
+      // without waiting for the async disconnect round-trip.
+      setTransportState('error')
+
+      // Then cleanly tear down the WebRTC session.
+      client.disconnect().catch(() => {})
     })
 
     return () => {
