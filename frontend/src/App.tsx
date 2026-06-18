@@ -9,10 +9,23 @@ import AgentPanel from './components/AgentPanel'
 import TranscriptView from './components/TranscriptView'
 import ToastContainer from './components/Toast'
 import { useToast } from './hooks/useToast'
-import { AgentConfig, DEFAULT_CONFIG, TranscriptEntry, TransportState } from './types'
+import { AgentConfig, DEFAULT_CONFIG, STT_PROVIDERS, LLM_PROVIDERS, TTS_PROVIDERS, TranscriptEntry, TransportState } from './types'
 
 let _entryCounter = 0
 const makeId = () => `entry-${++_entryCounter}`
+
+const CONNECT_TIMEOUT_MS = 15_000
+
+function validateConfigFrontend(cfg: AgentConfig): string | null {
+  const errors: string[] = []
+  const sttLabel = STT_PROVIDERS.find(p => p.value === cfg.stt_provider)?.label ?? cfg.stt_provider
+  const llmLabel = LLM_PROVIDERS.find(p => p.value === cfg.llm_provider)?.label ?? cfg.llm_provider
+  const ttsLabel = TTS_PROVIDERS.find(p => p.value === cfg.tts_provider)?.label ?? cfg.tts_provider
+  if (!cfg.stt_api_key.trim()) errors.push(`${sttLabel} STT API key is required`)
+  if (!cfg.llm_api_key.trim()) errors.push(`${llmLabel} LLM API key is required`)
+  if (!cfg.tts_api_key.trim()) errors.push(`${ttsLabel} TTS API key is required`)
+  return errors.length ? errors.join(' · ') : null
+}
 
 export default function App() {
   const [config, setConfig] = useState<AgentConfig>(DEFAULT_CONFIG)
@@ -70,15 +83,40 @@ export default function App() {
 
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleStart = useCallback(async () => {
+    // Validate before connecting — prevents the SDK from entering its
+    // reconnection loop (which swallows the 400 and retries for ~6 s).
+    const validationError = validateConfigFrontend(config)
+    if (validationError) {
+      toast(validationError, 'error')
+      return
+    }
+
+    let timeoutId: ReturnType<typeof setTimeout> | null = null
+
+    const forceStop = async () => {
+      try { await client.disconnect() } catch { /* ignore */ }
+    }
+
     try {
-      await client.connect({
-        webrtcRequestParams: {
-          endpoint: '/api/offer',
-          requestData: config,
-        },
-      } as any)
+      await Promise.race([
+        client.connect({
+          webrtcRequestParams: {
+            endpoint: '/api/offer',
+            requestData: config,
+          },
+        } as any),
+        new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(
+            () => reject(new Error('Connection timed out — check your API keys and try again')),
+            CONNECT_TIMEOUT_MS,
+          )
+        }),
+      ])
     } catch (err: unknown) {
-      // HTTP errors arrive as a Response object; pipeline errors as Error
+      // Kick the SDK out of any stuck/reconnecting state immediately
+      await forceStop()
+
+      // Decode the error message
       let message = 'Failed to connect'
       if (err instanceof Response) {
         try {
@@ -91,7 +129,8 @@ export default function App() {
         message = err.message
       }
       toast(message, 'error')
-      setTransportState('error')
+    } finally {
+      if (timeoutId !== null) clearTimeout(timeoutId)
     }
   }, [client, config, toast])
 
