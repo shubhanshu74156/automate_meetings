@@ -556,6 +556,15 @@ async def run_bot(webrtc_connection: SmallWebRTCConnection, config: dict) -> Non
         logger.info("Client disconnected — cancelling worker")
         await worker.cancel()
 
+    @worker.event_handler("on_pipeline_error")
+    async def on_pipeline_error(worker, frame):
+        # Log full details server-side (the ErrorFrame.exception has the original traceback)
+        exc = getattr(frame, "exception", None)
+        if exc:
+            logger.error(f"Pipeline error [{type(exc).__name__}]: {frame.error}", exc_info=exc)
+        else:
+            logger.error(f"Pipeline error: {frame.error}")
+
     # ── Run the pipeline (catch unexpected runtime failures) ──────────────────
     runner = WorkerRunner(handle_sigint=False)
     await runner.add_workers(worker)

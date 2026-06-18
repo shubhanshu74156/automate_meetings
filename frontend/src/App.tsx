@@ -16,6 +16,41 @@ const makeId = () => `entry-${++_entryCounter}`
 
 const CONNECT_TIMEOUT_MS = 15_000
 
+/**
+ * Strip Pipecat's generic prefixes and parse provider HTTP error details
+ * into a short, human-readable message.
+ *
+ * Handles formats produced by:
+ *   - aiohttp  "401, message='Unauthorized', url=..."
+ *   - OpenAI SDK  "Error code: 401 - {'error': {'message': '...'}}"
+ *   - websockets  "server rejected WebSocket connection: HTTP 401"
+ */
+function cleanErrorMessage(raw: string): string {
+  let msg = raw
+    .replace(/^(unknown error occurred|error)[:\s]+/i, '')
+    .replace(/^sarvam\s+api\s+error[:\s]+/i, '')
+    .trim()
+
+  // aiohttp: "401, message='Unauthorized', url=..."
+  const aiohttpMatch = msg.match(/^(\d{3}),\s*message=['"]([^'"]+)['"]/i)
+  if (aiohttpMatch) return `HTTP ${aiohttpMatch[1]}: ${aiohttpMatch[2]}`
+
+  // OpenAI SDK: "Error code: 401 - {'error': {'message': '...' ...}}"
+  const openaiMatch = msg.match(/Error code:\s*(\d{3})\s*-.*?['"]message['"]\s*:\s*['"]([^'"]+)['"]/s)
+  if (openaiMatch) return `HTTP ${openaiMatch[1]}: ${openaiMatch[2]}`
+
+  // websockets WS rejection: "server rejected WebSocket connection: HTTP 401"
+  const wsRejectMatch = msg.match(/server rejected.*?HTTP (\d{3})/i)
+  if (wsRejectMatch) return `HTTP ${wsRejectMatch[1]}: provider rejected the connection — check your API key`
+
+  // Generic HTTP status mention
+  const httpStatusMatch = msg.match(/\bHTTP[/ ](\d{3})\b/)
+  if (httpStatusMatch) return `HTTP ${httpStatusMatch[1]}: ${msg.split('\n')[0].trim()}`
+
+  // Truncate long messages (e.g. full WebSocket response dump)
+  return msg.length > 220 ? msg.slice(0, 220) + '…' : (msg || 'An unknown error occurred')
+}
+
 function validateConfigFrontend(cfg: AgentConfig): string | null {
   const errors: string[] = []
   const sttLabel = STT_PROVIDERS.find(p => p.value === cfg.stt_provider)?.label ?? cfg.stt_provider
@@ -67,13 +102,21 @@ export default function App() {
       addEntry('agent', data.text)
     })
 
-    // Pipeline error from the bot (FatalErrorFrame → RTVI error message)
+    // Pipeline errors from the bot — RTVI sends { error: string, fatal: boolean }
+    // (not { message }). Fatal errors stop the pipeline; non-fatal ones are warnings.
     client.on(RTVIEvent.Error, (msg: RTVIMessage) => {
-      const data = msg.data as { message?: string } | null
-      const message = data?.message ?? 'An unknown pipeline error occurred'
-      toast(message, 'error')
-      // Stop the connection so the user can reconfigure and retry
-      client.disconnect().catch(() => {})
+      const data = msg.data as { error?: string; fatal?: boolean } | null
+      const raw = data?.error ?? 'An unknown error occurred'
+      const message = cleanErrorMessage(raw)
+
+      if (data?.fatal !== false) {
+        // Fatal: show error toast and stop the session so user can reconfigure
+        toast(message, 'error')
+        client.disconnect().catch(() => {})
+      } else {
+        // Non-fatal: warn but keep the session alive
+        toast(message, 'warning')
+      }
     })
 
     return () => {
