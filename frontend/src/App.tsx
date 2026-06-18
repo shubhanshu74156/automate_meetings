@@ -72,8 +72,10 @@ export default function App() {
     setError(null)
     try {
       await client.connect({
-        connection_url: '/api/offer',
-        requestData: config,
+        webrtcRequestParams: {
+          endpoint: '/api/offer',
+          requestData: config,
+        },
       } as any)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
