@@ -1,0 +1,16 @@
+# Core Pipecat with required service extras
+pipecat-ai[silero,sarvam,openai,cerebras,cartesia]>=1.4.0
+
+# Web framework
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+
+# Browser automation — joins Google Meet
+playwright>=1.44.0
+
+# Utilities
+python-dotenv>=1.0.0
+loguru>=0.7.0
+
+# Direct audio output to VB-Cable / virtual devices
+sounddevice>=0.4.6

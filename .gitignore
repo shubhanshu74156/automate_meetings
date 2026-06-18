@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[oc]
+*.egg-info/
+build/
+dist/
+wheels/
+.venv/
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Node
+node_modules/
+frontend/dist/
+frontend/build/
+
+# Generated / tooling
+graphify-out/
+.claude/
+.codex/
+
+# OS
+.DS_Store
+Thumbs.db
